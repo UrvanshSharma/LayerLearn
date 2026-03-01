@@ -1,0 +1,9 @@
+mss
+easyocr
+keyboard
+pillow
+ollama
+torch
+torchvision
+opencv-python-headless
+numpy
