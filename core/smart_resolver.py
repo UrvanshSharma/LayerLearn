@@ -12,8 +12,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from config import settings, ROOT_DIR
+from config import ROOT_DIR
 from core.logger import get_logger
+from core.platform_utils import IS_MAC, IS_WINDOWS, command_exists
 
 log = get_logger(__name__)
 
@@ -50,34 +51,99 @@ def set_pref(key: str, value) -> None:
 # ── App Detection ────────────────────────────────────────────────────────
 
 _installed_apps_cache: Optional[set] = None
+_installed_apps_cased: dict[str, str] = {}
+
+
+def _register_installed_app(name: str, apps: set[str]) -> None:
+    clean = (name or "").strip()
+    if not clean:
+        return
+    lower = clean.lower()
+    apps.add(lower)
+    _installed_apps_cased.setdefault(lower, clean)
 
 
 def get_installed_apps() -> set:
-    """Get all installed macOS applications (cached)."""
+    """Get installed applications for the current OS (cached)."""
     global _installed_apps_cache
     if _installed_apps_cache is not None:
         return _installed_apps_cache
 
     apps = set()
-    for app_dir in [Path("/Applications"), Path.home() / "Applications"]:
-        if app_dir.exists():
-            for item in app_dir.iterdir():
-                if item.suffix == ".app":
-                    name = item.stem.lower()
-                    apps.add(name)
+    _installed_apps_cased.clear()
 
-    # Also check for apps via system_profiler (catches more apps)
-    try:
-        result = subprocess.run(
-            ["mdfind", "kMDItemKind == 'Application'"],
-            capture_output=True, text=True, timeout=5,
-        )
-        for line in result.stdout.strip().split("\n"):
-            if line.endswith(".app"):
-                name = Path(line).stem.lower()
-                apps.add(name)
-    except Exception:
-        pass
+    if IS_MAC:
+        for app_dir in [Path("/Applications"), Path.home() / "Applications"]:
+            if app_dir.exists():
+                for item in app_dir.iterdir():
+                    if item.suffix == ".app":
+                        _register_installed_app(item.stem, apps)
+
+        try:
+            result = subprocess.run(
+                ["mdfind", "kMDItemKind == 'Application'"],
+                capture_output=True, text=True, timeout=6,
+            )
+            for line in result.stdout.strip().split("\n"):
+                if line.endswith(".app"):
+                    _register_installed_app(Path(line).stem, apps)
+        except Exception:
+            pass
+
+    elif IS_WINDOWS:
+        # Start menu / app registrations (works on most modern Windows setups)
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-StartApps | Select-Object -ExpandProperty Name",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            for line in result.stdout.splitlines():
+                _register_installed_app(line, apps)
+        except Exception:
+            pass
+
+        # Add common browser/app executables if found in PATH
+        exe_to_name = {
+            "chrome.exe": "Google Chrome",
+            "msedge.exe": "Microsoft Edge",
+            "firefox.exe": "Firefox",
+            "brave.exe": "Brave",
+            "Code.exe": "Visual Studio Code",
+            "wt.exe": "Windows Terminal",
+            "notepad.exe": "Notepad",
+            "explorer.exe": "File Explorer",
+        }
+        for exe, display in exe_to_name.items():
+            try:
+                where_result = subprocess.run(
+                    ["where", exe],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                if where_result.returncode == 0 and where_result.stdout.strip():
+                    _register_installed_app(display, apps)
+            except Exception:
+                pass
+
+    else:
+        # Linux/fallback: detect common desktop binaries
+        for cmd, display in {
+            "google-chrome": "Google Chrome",
+            "firefox": "Firefox",
+            "brave-browser": "Brave Browser",
+            "code": "Visual Studio Code",
+            "xdg-open": "Default Browser",
+        }.items():
+            if command_exists(cmd):
+                _register_installed_app(display, apps)
 
     _installed_apps_cache = apps
     log.debug("Found {} installed apps", len(apps))
@@ -107,6 +173,10 @@ def is_app_installed(name: str) -> bool:
         "spotify": "spotify",
         "zoom": "zoom.us",
         "notion": "notion",
+        "edge": "microsoft edge",
+        "terminal": "windows terminal" if IS_WINDOWS else "terminal",
+        "file explorer": "file explorer",
+        "explorer": "file explorer",
     }
     resolved = aliases.get(name_lower, name_lower)
     if resolved in apps:
@@ -127,11 +197,7 @@ def find_app_name(name: str) -> Optional[str]:
 
     # Direct match
     if name_lower in apps:
-        for app_dir in [Path("/Applications"), Path.home() / "Applications"]:
-            for item in app_dir.iterdir():
-                if item.suffix == ".app" and item.stem.lower() == name_lower:
-                    return item.stem
-        return name.title()
+        return _installed_apps_cased.get(name_lower, name.title())
 
     # Alias match
     aliases = {
@@ -141,6 +207,9 @@ def find_app_name(name: str) -> Optional[str]:
         "code": "Visual Studio Code",
         "iterm": "iTerm",
         "zoom": "zoom.us",
+        "edge": "Microsoft Edge",
+        "terminal": "Windows Terminal" if IS_WINDOWS else "Terminal",
+        "explorer": "File Explorer",
     }
     if name_lower in aliases:
         resolved = aliases[name_lower]
@@ -150,12 +219,7 @@ def find_app_name(name: str) -> Optional[str]:
     # Fuzzy match
     for app in apps:
         if name_lower in app:
-            # Find the properly-cased name
-            for app_dir in [Path("/Applications"), Path.home() / "Applications"]:
-                for item in app_dir.iterdir():
-                    if item.suffix == ".app" and item.stem.lower() == app:
-                        return item.stem
-            return app.title()
+            return _installed_apps_cased.get(app, app.title())
 
     return None
 
@@ -163,12 +227,35 @@ def find_app_name(name: str) -> Optional[str]:
 def get_installed_browsers() -> list[str]:
     """Get list of installed browsers."""
     browsers = []
-    browser_names = ["Google Chrome", "Safari", "Firefox", "Brave Browser",
-                     "Microsoft Edge", "Arc", "Opera", "Vivaldi"]
+    browser_names = [
+        "Google Chrome",
+        "Safari",
+        "Firefox",
+        "Brave Browser",
+        "Brave",
+        "Microsoft Edge",
+        "Arc",
+        "Opera",
+        "Vivaldi",
+    ]
     apps = get_installed_apps()
     for b in browser_names:
         if b.lower() in apps:
             browsers.append(b)
+
+    if IS_WINDOWS:
+        for exe, name in [
+            ("chrome.exe", "Google Chrome"),
+            ("msedge.exe", "Microsoft Edge"),
+            ("firefox.exe", "Firefox"),
+            ("brave.exe", "Brave"),
+        ]:
+            try:
+                r = subprocess.run(["where", exe], capture_output=True, text=True, timeout=3)
+                if r.returncode == 0 and r.stdout.strip() and name not in browsers:
+                    browsers.append(name)
+            except Exception:
+                pass
     return browsers
 
 

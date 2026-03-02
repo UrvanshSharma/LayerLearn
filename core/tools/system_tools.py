@@ -1,40 +1,57 @@
 """
 System & Automation Tools
 ==========================
-Run commands, open apps/URLs in Chrome, automate macOS tasks, git operations.
+Run commands, open apps/URLs, automate desktop tasks, and inspect git state.
 """
+
+from __future__ import annotations
 
 import subprocess
 import urllib.parse
 from pathlib import Path
 
+from core.platform_utils import (
+    IS_MAC,
+    IS_WINDOWS,
+    command_exists,
+    open_url_in_browser,
+)
 from core.tools import Tool, ToolResult, register_tool
 from core.logger import get_logger
 
 log = get_logger(__name__)
 
+
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-def _open_url_in_chrome(url: str) -> ToolResult:
-    """Open a URL specifically in Google Chrome on macOS."""
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+def _open_url_in_chrome(url: str, browser: str | None = None) -> ToolResult:
+    preferred_browser = browser or "Google Chrome"
+    ok, msg = open_url_in_browser(url, preferred_browser)
+    if ok:
+        log.info("Opened URL: {}", msg)
+        return ToolResult(success=True, output=msg)
+    return ToolResult(success=False, output=msg)
+
+
+def _import_pyautogui():
+    try:
+        import pyautogui  # type: ignore
+        return pyautogui
+    except Exception:
+        return None
+
+
+def _run_windows_start(target: str) -> bool:
     try:
         subprocess.run(
-            ["open", "-a", "Google Chrome", url],
-            check=True, capture_output=True, timeout=5,
+            ["cmd", "/c", "start", "", target],
+            check=True,
+            capture_output=True,
+            timeout=6,
         )
-        log.info("Opened in Chrome: {}", url)
-        return ToolResult(success=True, output=f"Opened {url} in Chrome")
-    except subprocess.CalledProcessError:
-        # Fallback: try just "open" (uses default browser)
-        try:
-            subprocess.run(["open", url], check=True, capture_output=True, timeout=5)
-            return ToolResult(success=True, output=f"Opened {url}")
-        except Exception as e:
-            return ToolResult(success=False, output=f"Failed to open URL: {e}")
-    except Exception as e:
-        return ToolResult(success=False, output=f"Failed: {e}")
+        return True
+    except Exception:
+        return False
 
 
 # ── Tools ────────────────────────────────────────────────────────────────
@@ -53,8 +70,12 @@ class RunCommandTool(Tool):
             return ToolResult(success=False, output="Missing 'command'")
         try:
             result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True,
-                timeout=30, cwd=kwargs.get("cwd", "."),
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=kwargs.get("cwd", "."),
             )
             output = result.stdout
             if result.stderr:
@@ -71,10 +92,8 @@ class RunCommandTool(Tool):
 class OpenAppTool(Tool):
     name = "open_app"
     description = (
-        "Open an application on macOS. "
-        "Argument: 'name' (app name like 'Google Chrome', 'Notes', 'Terminal', 'Spotify', 'WhatsApp'). "
-        "Common app names: 'Google Chrome', 'Safari', 'Spotify', 'Slack', 'Discord', 'Finder', "
-        "'Terminal', 'Notes', 'Messages', 'Mail', 'Calendar', 'VS Code' (use 'Visual Studio Code')"
+        "Open an application on the current OS. "
+        "Argument: 'name' (e.g. 'Google Chrome', 'Visual Studio Code', 'Terminal')."
     )
     requires_confirmation = False
 
@@ -83,138 +102,157 @@ class OpenAppTool(Tool):
         if not name:
             return ToolResult(success=False, output="Missing app 'name'")
 
-        # Normalise common app name variations (expanded)
-        name_map = {
+        # Normalize common app aliases
+        common_map = {
             "chrome": "Google Chrome",
             "google chrome": "Google Chrome",
             "vscode": "Visual Studio Code",
             "vs code": "Visual Studio Code",
             "code": "Visual Studio Code",
+            "terminal": "Terminal" if IS_MAC else "Windows Terminal",
             "iterm": "iTerm",
             "iterm2": "iTerm",
             "whatsapp": "WhatsApp",
-            "wechat": "WeChat",
-            "telegram": "Telegram",
             "spotify": "Spotify",
             "slack": "Slack",
             "discord": "Discord",
-            "zoom": "zoom.us",
-            "notion": "Notion",
-            "figma": "Figma",
             "firefox": "Firefox",
-            "brave": "Brave Browser",
+            "brave": "Brave Browser" if IS_MAC else "Brave",
             "edge": "Microsoft Edge",
-            "arc": "Arc",
-            "finder": "Finder",
-            "terminal": "Terminal",
-            "notes": "Notes",
-            "messages": "Messages",
-            "mail": "Mail",
-            "calendar": "Calendar",
-            "calculator": "Calculator",
-            "preview": "Preview",
-            "music": "Music",
-            "apple music": "Music",
-            "photos": "Photos",
-            "safari": "Safari",
-            "system preferences": "System Preferences",
-            "settings": "System Preferences",
-            "system settings": "System Settings",
-            "activity monitor": "Activity Monitor",
-            "xcode": "Xcode",
-            "pages": "Pages",
-            "numbers": "Numbers",
-            "keynote": "Keynote",
-            "maps": "Maps",
-            "facetime": "FaceTime",
+            "notepad": "Notepad",
+            "explorer": "File Explorer",
         }
-        resolved = name_map.get(name.lower(), name)
+        resolved = common_map.get(name.lower().strip(), name)
 
-        # Try resolved name first
-        try:
-            subprocess.run(
-                ["open", "-a", resolved],
-                check=True, capture_output=True, text=True, timeout=5,
-            )
-            log.info("Opened app: {} (resolved: {})", name, resolved)
-            return ToolResult(success=True, output=f"Opened {resolved}")
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            pass
+        if IS_MAC:
+            for candidate in [resolved, name]:
+                try:
+                    subprocess.run(
+                        ["open", "-a", candidate],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=6,
+                    )
+                    log.info("Opened app: {}", candidate)
+                    return ToolResult(success=True, output=f"Opened {candidate}")
+                except Exception:
+                    pass
 
-        # Try original name
-        try:
-            subprocess.run(
-                ["open", "-a", name],
-                check=True, capture_output=True, text=True, timeout=5,
-            )
-            return ToolResult(success=True, output=f"Opened {name}")
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            pass
-
-        # Last resort: fuzzy search with mdfind
-        try:
-            result = subprocess.run(
-                ["mdfind", "kMDItemKind == 'Application'", "-name", name],
-                capture_output=True, text=True, timeout=3,
-            )
-            apps = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
-            if apps:
-                app_path = apps[0]
-                subprocess.run(
-                    ["open", app_path],
-                    check=True, capture_output=True, timeout=5,
+            # Fuzzy fallback with Spotlight index
+            try:
+                result = subprocess.run(
+                    ["mdfind", "kMDItemKind == 'Application'", "-name", name],
+                    capture_output=True,
+                    text=True,
+                    timeout=4,
                 )
-                app_name = Path(app_path).stem
-                log.info("Opened via mdfind: {}", app_name)
-                return ToolResult(success=True, output=f"Opened {app_name}")
-        except Exception:
-            pass
+                app_paths = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+                if app_paths:
+                    subprocess.run(["open", app_paths[0]], check=True, capture_output=True, timeout=6)
+                    return ToolResult(success=True, output=f"Opened {Path(app_paths[0]).stem}")
+            except Exception:
+                pass
+            return ToolResult(success=False, output=f"Could not open '{name}'.")
 
-        return ToolResult(
-            success=False,
-            output=f"Could not find app '{name}'. Try the exact name from /Applications.",
-        )
+        if IS_WINDOWS:
+            windows_exec_map = {
+                "Google Chrome": "chrome.exe",
+                "Microsoft Edge": "msedge.exe",
+                "Firefox": "firefox.exe",
+                "Brave": "brave.exe",
+                "Visual Studio Code": "Code.exe",
+                "Windows Terminal": "wt.exe",
+                "Notepad": "notepad.exe",
+                "File Explorer": "explorer.exe",
+            }
+
+            # Try Start-Process with app name
+            for candidate in [resolved, windows_exec_map.get(resolved, ""), name]:
+                if not candidate:
+                    continue
+                safe = candidate.replace("'", "''")
+                cmd = f"Start-Process -FilePath '{safe}'"
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", cmd],
+                    capture_output=True,
+                    timeout=6,
+                )
+                if result.returncode == 0:
+                    return ToolResult(success=True, output=f"Opened {candidate}")
+
+            # Try via cmd start fallback
+            for candidate in [resolved, name]:
+                if _run_windows_start(candidate):
+                    return ToolResult(success=True, output=f"Opened {candidate}")
+
+            # Try executable lookup
+            exe_candidate = windows_exec_map.get(resolved)
+            if exe_candidate:
+                where_result = subprocess.run(
+                    ["where", exe_candidate],
+                    capture_output=True,
+                    text=True,
+                    timeout=4,
+                )
+                path = where_result.stdout.splitlines()[0].strip() if where_result.stdout.strip() else ""
+                if path and _run_windows_start(path):
+                    return ToolResult(success=True, output=f"Opened {resolved}")
+
+            return ToolResult(success=False, output=f"Could not open '{name}'.")
+
+        # Linux best effort
+        try:
+            subprocess.Popen([resolved])
+            return ToolResult(success=True, output=f"Opened {resolved}")
+        except Exception:
+            if command_exists("xdg-open"):
+                result = subprocess.run(["xdg-open", resolved], capture_output=True, timeout=6)
+                if result.returncode == 0:
+                    return ToolResult(success=True, output=f"Opened {resolved}")
+            return ToolResult(success=False, output=f"Could not open '{name}'.")
 
 
 class OpenURLTool(Tool):
     name = "open_url"
     description = (
-        "Open a URL in Google Chrome (NOT Safari). "
-        "Argument: 'url' (the web address). "
-        "Use for: 'open google.com', 'open youtube', 'go to whatsapp.com', etc."
+        "Open a URL in browser. "
+        "Arguments: 'url', optional 'browser'. "
+        "Use for: 'open google.com', 'open youtube', 'go to whatsapp.com'."
     )
     requires_confirmation = False
 
     def execute(self, **kwargs) -> ToolResult:
         url = kwargs.get("url", "")
+        browser = kwargs.get("browser")
         if not url:
             return ToolResult(success=False, output="Missing 'url'")
-        return _open_url_in_chrome(url)
+        return _open_url_in_chrome(url, browser)
 
 
 class SearchWebTool(Tool):
     name = "search_web"
     description = (
-        "Search the web using Google in Chrome. "
+        "Search the web using Google. "
         "Argument: 'query'. "
-        "Use for: 'search for X', 'google X', 'find X'"
+        "Use for: 'search for X', 'google X', 'find X'."
     )
     requires_confirmation = False
 
     def execute(self, **kwargs) -> ToolResult:
         query = kwargs.get("query", "")
+        browser = kwargs.get("browser")
         if not query:
             return ToolResult(success=False, output="Missing 'query'")
         url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-        return _open_url_in_chrome(url)
+        return _open_url_in_chrome(url, browser)
 
 
 class TypeTextTool(Tool):
     name = "type_text"
     description = (
-        "Type text using the keyboard (simulates typing). ⚠️ REQUIRES CONFIRMATION. "
-        "Argument: 'text'. "
-        "Use for: 'type this', 'write this message', 'type in the field'"
+        "Type text using keyboard automation. ⚠️ REQUIRES CONFIRMATION. "
+        "Argument: 'text'."
     )
     requires_confirmation = True
 
@@ -222,10 +260,22 @@ class TypeTextTool(Tool):
         text = kwargs.get("text", "")
         if not text:
             return ToolResult(success=False, output="Missing 'text'")
+
+        if IS_MAC:
+            try:
+                escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+                script = f'tell application "System Events" to keystroke "{escaped}"'
+                subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
+                return ToolResult(success=True, output=f"Typed: {text[:100]}")
+            except Exception as e:
+                return ToolResult(success=False, output=f"Failed to type: {e}")
+
+        pyautogui = _import_pyautogui()
+        if pyautogui is None:
+            return ToolResult(success=False, output="pyautogui is required for typing on this OS.")
+
         try:
-            escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-            script = f'tell application "System Events" to keystroke "{escaped}"'
-            subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
+            pyautogui.write(text, interval=0.01)
             return ToolResult(success=True, output=f"Typed: {text[:100]}")
         except Exception as e:
             return ToolResult(success=False, output=f"Failed to type: {e}")
@@ -235,7 +285,7 @@ class KeyPressTool(Tool):
     name = "key_press"
     description = (
         "Press a keyboard shortcut. ⚠️ REQUIRES CONFIRMATION. "
-        "Argument: 'keys' (like 'cmd+c', 'cmd+v', 'cmd+tab', 'enter', 'cmd+s'). "
+        "Argument: 'keys' (like 'cmd+c', 'ctrl+v', 'enter', 'cmd+s')."
     )
     requires_confirmation = True
 
@@ -243,40 +293,82 @@ class KeyPressTool(Tool):
         keys = kwargs.get("keys", "")
         if not keys:
             return ToolResult(success=False, output="Missing 'keys'")
-        try:
-            parts = [k.strip().lower() for k in keys.replace("+", " ").split()]
-            modifiers = []
-            key = None
-            mod_map = {
-                "cmd": "command down", "command": "command down",
-                "ctrl": "control down", "control": "control down",
-                "alt": "option down", "option": "option down",
-                "shift": "shift down",
-            }
-            for p in parts:
-                if p in mod_map:
-                    modifiers.append(mod_map[p])
-                else:
-                    key = p
 
-            if key is None:
+        if IS_MAC:
+            try:
+                parts = [k.strip().lower() for k in keys.replace("+", " ").split()]
+                modifiers = []
+                key = None
+                mod_map = {
+                    "cmd": "command down",
+                    "command": "command down",
+                    "ctrl": "control down",
+                    "control": "control down",
+                    "alt": "option down",
+                    "option": "option down",
+                    "shift": "shift down",
+                }
+                for p in parts:
+                    if p in mod_map:
+                        modifiers.append(mod_map[p])
+                    else:
+                        key = p
+
+                if key is None:
+                    return ToolResult(success=False, output=f"Could not parse: {keys}")
+
+                if modifiers:
+                    mod_str = ", ".join(modifiers)
+                    script = f'tell application "System Events" to keystroke "{key}" using {{{mod_str}}}'
+                else:
+                    special = {
+                        "enter": 36,
+                        "return": 36,
+                        "tab": 48,
+                        "escape": 53,
+                        "esc": 53,
+                        "delete": 51,
+                        "space": 49,
+                        "up": 126,
+                        "down": 125,
+                        "left": 123,
+                        "right": 124,
+                    }
+                    if key in special:
+                        script = f'tell application "System Events" to key code {special[key]}'
+                    else:
+                        script = f'tell application "System Events" to keystroke "{key}"'
+
+                subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
+                return ToolResult(success=True, output=f"Pressed: {keys}")
+            except Exception as e:
+                return ToolResult(success=False, output=f"Failed: {e}")
+
+        pyautogui = _import_pyautogui()
+        if pyautogui is None:
+            return ToolResult(success=False, output="pyautogui is required for key press on this OS.")
+
+        try:
+            raw_parts = [k.strip().lower() for k in keys.replace("+", " ").split() if k.strip()]
+            if not raw_parts:
                 return ToolResult(success=False, output=f"Could not parse: {keys}")
 
-            if modifiers:
-                mod_str = ", ".join(modifiers)
-                script = f'tell application "System Events" to keystroke "{key}" using {{{mod_str}}}'
-            else:
-                special = {
-                    "enter": 36, "return": 36, "tab": 48, "escape": 53, "esc": 53,
-                    "delete": 51, "space": 49,
-                    "up": 126, "down": 125, "left": 123, "right": 124,
-                }
-                if key in special:
-                    script = f'tell application "System Events" to key code {special[key]}'
-                else:
-                    script = f'tell application "System Events" to keystroke "{key}"'
+            key_map = {
+                "command": "ctrl",
+                "cmd": "ctrl",
+                "control": "ctrl",
+                "option": "alt",
+                "return": "enter",
+                "escape": "esc",
+                "win": "winleft",
+            }
+            parts = [key_map.get(p, p) for p in raw_parts]
 
-            subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
+            if len(parts) == 1:
+                pyautogui.press(parts[0])
+            else:
+                pyautogui.hotkey(*parts)
+
             return ToolResult(success=True, output=f"Pressed: {keys}")
         except Exception as e:
             return ToolResult(success=False, output=f"Failed: {e}")
@@ -290,8 +382,11 @@ class GitDiffTool(Tool):
     def execute(self, **kwargs) -> ToolResult:
         try:
             result = subprocess.run(
-                ["git", "diff"], capture_output=True, text=True,
-                timeout=10, cwd=kwargs.get("path", "."),
+                ["git", "diff"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=kwargs.get("path", "."),
             )
             output = result.stdout or "(no changes)"
             if len(output) > 5000:
@@ -309,8 +404,11 @@ class GitStatusTool(Tool):
     def execute(self, **kwargs) -> ToolResult:
         try:
             result = subprocess.run(
-                ["git", "status", "--short"], capture_output=True, text=True,
-                timeout=10, cwd=kwargs.get("path", "."),
+                ["git", "status", "--short"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=kwargs.get("path", "."),
             )
             return ToolResult(success=True, output=result.stdout or "(clean)")
         except Exception as e:
@@ -319,18 +417,45 @@ class GitStatusTool(Tool):
 
 class SetVolumeTool(Tool):
     name = "set_volume"
-    description = "Set macOS volume (0-100). Use for: 'set volume to 50', 'mute'"
+    description = "Set system volume (0-100). Use for: 'set volume to 50', 'mute'."
     requires_confirmation = False
 
     def execute(self, **kwargs) -> ToolResult:
         level = kwargs.get("level", 50)
         try:
             level = max(0, min(100, int(level)))
-            subprocess.run(
-                ["osascript", "-e", f"set volume output volume {level}"],
-                check=True, capture_output=True, timeout=3,
-            )
-            return ToolResult(success=True, output=f"Volume set to {level}%")
+
+            if IS_MAC:
+                subprocess.run(
+                    ["osascript", "-e", f"set volume output volume {level}"],
+                    check=True, capture_output=True, timeout=3,
+                )
+                return ToolResult(success=True, output=f"Volume set to {level}%")
+
+            if IS_WINDOWS:
+                import ctypes
+
+                vol = int((level / 100.0) * 65535)
+                packed = (vol & 0xFFFF) | ((vol & 0xFFFF) << 16)
+                rc = ctypes.windll.winmm.waveOutSetVolume(0xFFFFFFFF, packed)  # type: ignore[attr-defined]
+                if rc != 0:
+                    return ToolResult(success=False, output="Failed to set system volume")
+                return ToolResult(success=True, output=f"Volume set to {level}%")
+
+            # Linux best-effort
+            if command_exists("pactl"):
+                subprocess.run(
+                    ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{level}%"],
+                    check=True, capture_output=True, timeout=4,
+                )
+                return ToolResult(success=True, output=f"Volume set to {level}%")
+            if command_exists("amixer"):
+                subprocess.run(
+                    ["amixer", "sset", "Master", f"{level}%"],
+                    check=True, capture_output=True, timeout=4,
+                )
+                return ToolResult(success=True, output=f"Volume set to {level}%")
+            return ToolResult(success=False, output="No supported volume backend found on this OS.")
         except Exception as e:
             return ToolResult(success=False, output=f"Failed: {e}")
 
@@ -342,6 +467,7 @@ class GetTimeTool(Tool):
 
     def execute(self, **kwargs) -> ToolResult:
         from datetime import datetime
+
         now = datetime.now()
         return ToolResult(
             success=True,
@@ -351,7 +477,7 @@ class GetTimeTool(Tool):
 
 class NotificationTool(Tool):
     name = "send_notification"
-    description = "Send a macOS notification. Arguments: 'title', 'message'."
+    description = "Send a desktop notification. Arguments: 'title', 'message'."
     requires_confirmation = False
 
     def execute(self, **kwargs) -> ToolResult:
@@ -359,10 +485,49 @@ class NotificationTool(Tool):
         message = kwargs.get("message", "")
         if not message:
             return ToolResult(success=False, output="Missing 'message'")
+
+        # Primary backend: plyer (cross-platform)
         try:
-            script = f'display notification "{message}" with title "{title}"'
-            subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=3)
+            from plyer import notification  # type: ignore
+
+            notification.notify(
+                title=title,
+                message=message,
+                app_name="LayerLearn",
+                timeout=5,
+            )
             return ToolResult(success=True, output=f"Notification sent: {message[:50]}")
+        except Exception:
+            pass
+
+        try:
+            if IS_MAC:
+                safe_title = title.replace('"', '\\"')
+                safe_msg = message.replace('"', '\\"')
+                script = f'display notification "{safe_msg}" with title "{safe_title}"'
+                subprocess.run(
+                    ["osascript", "-e", script],
+                    check=True,
+                    capture_output=True,
+                    timeout=3,
+                )
+                return ToolResult(success=True, output=f"Notification sent: {message[:50]}")
+
+            if IS_WINDOWS:
+                safe_title = title.replace("'", "''")
+                safe_msg = message.replace("'", "''")
+                script = (
+                    "[void][Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); "
+                    f"[System.Windows.Forms.MessageBox]::Show('{safe_msg}', '{safe_title}') | Out-Null"
+                )
+                subprocess.Popen(["powershell", "-NoProfile", "-Command", script])
+                return ToolResult(success=True, output=f"Notification shown: {message[:50]}")
+
+            if command_exists("notify-send"):
+                subprocess.run(["notify-send", title, message], check=True, capture_output=True, timeout=3)
+                return ToolResult(success=True, output=f"Notification sent: {message[:50]}")
+
+            return ToolResult(success=False, output="No notification backend available.")
         except Exception as e:
             return ToolResult(success=False, output=f"Failed: {e}")
 
@@ -370,9 +535,8 @@ class NotificationTool(Tool):
 class ScreenshotAndOpenTool(Tool):
     name = "open_website_in_chrome"
     description = (
-        "Open a specific website in Google Chrome. "
-        "Argument: 'url' (like 'whatsapp.com', 'youtube.com', 'twitter.com'). "
-        "Use for: 'open whatsapp', 'open youtube in chrome', 'go to twitter'"
+        "Open a website in browser. "
+        "Argument: 'url' (like 'whatsapp.com', 'youtube.com', 'twitter.com')."
     )
     requires_confirmation = False
 
@@ -385,10 +549,17 @@ class ScreenshotAndOpenTool(Tool):
 
 # ── Register ─────────────────────────────────────────────────────────────
 for _cls in [
-    RunCommandTool, OpenAppTool, OpenURLTool, SearchWebTool,
-    TypeTextTool, KeyPressTool,
-    GitDiffTool, GitStatusTool,
-    SetVolumeTool, GetTimeTool, NotificationTool,
+    RunCommandTool,
+    OpenAppTool,
+    OpenURLTool,
+    SearchWebTool,
+    TypeTextTool,
+    KeyPressTool,
+    GitDiffTool,
+    GitStatusTool,
+    SetVolumeTool,
+    GetTimeTool,
+    NotificationTool,
     ScreenshotAndOpenTool,
 ]:
     register_tool(_cls())

@@ -17,6 +17,8 @@ pillow>=10.0.0
 # Input / clipboard
 pynput>=1.7.6
 pyperclip>=1.8.2
+pyautogui>=0.9.54
+plyer>=2.1.0
 
 # Terminal UI
 rich>=13.0.0

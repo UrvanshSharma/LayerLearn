@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from typing import Optional
 
 import ollama
@@ -41,6 +40,7 @@ from core.smart_resolver import (
     WEB_SERVICES,
     ResolveResult,
 )
+from core.platform_utils import open_url_in_browser
 
 log = get_logger(__name__)
 
@@ -325,28 +325,16 @@ class Agent:
 
     def _open_in_browser(self, url: str, browser: str, message: str = "") -> str:
         """Open a URL in a specific browser."""
-        if not url.startswith(("http://", "https://")):
-            url = "https://" + url
-        try:
-            subprocess.run(
-                ["open", "-a", browser, url],
-                check=True, capture_output=True, timeout=5,
-            )
-            msg = message or f"Opened {url} in {browser}"
+        ok, fallback_message = open_url_in_browser(url, browser)
+        if ok:
+            msg = message or fallback_message
             self.memory.add_assistant(msg)
-            log.info("🌐 Opened {} in {}", url, browser)
+            log.info("🌐 {}", msg)
             return msg
-        except subprocess.CalledProcessError:
-            # Fallback to any browser
-            try:
-                subprocess.run(["open", url], check=True, capture_output=True, timeout=5)
-                msg = f"Opened {url}"
-                self.memory.add_assistant(msg)
-                return msg
-            except Exception as e:
-                err = f"Failed to open {url}: {e}"
-                self.memory.add_assistant(err)
-                return err
+
+        err = f"Failed to open {url}: {fallback_message}"
+        self.memory.add_assistant(err)
+        return err
 
     # ── Clarification Handling ───────────────────────────────────────────
 

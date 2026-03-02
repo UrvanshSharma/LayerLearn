@@ -8,15 +8,14 @@ The prompts are designed to force the LLM to give PRECISE, USEFUL descriptions.
 from __future__ import annotations
 
 import base64
-import subprocess
 from io import BytesIO
-from typing import Optional
 
 import ollama
 from PIL import Image
 
 from config import settings
 from core.logger import get_logger
+from core.window_utils import get_front_app_name
 
 log = get_logger(__name__)
 
@@ -35,15 +34,7 @@ def _image_to_base64(img: Image.Image) -> str:
 
 def _get_active_app() -> str:
     """Get the currently active app name for context."""
-    try:
-        script = 'tell application "System Events" to name of first application process whose frontmost is true'
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=1,
-        )
-        return result.stdout.strip()
-    except Exception:
-        return "Unknown"
+    return get_front_app_name() or "Unknown"
 
 
 def analyze_image(
@@ -87,7 +78,7 @@ def analyze_screen(prompt: str | None = None) -> str:
     active_app = _get_active_app()
 
     if prompt is None:
-        prompt = f"""You are looking at a Mac screen. The active/frontmost app is: {active_app}
+        prompt = f"""You are looking at a desktop screen. The active/frontmost app is: {active_app}
 
 Describe EXACTLY what you see. Be SPECIFIC and PRECISE:
 1. What app is in the foreground? What is its current state?
@@ -107,7 +98,7 @@ def analyze_screen_with_question(question: str) -> str:
 
     active_app = _get_active_app()
 
-    prompt = f"""You are looking at a Mac screen. Active app: {active_app}
+    prompt = f"""You are looking at a desktop screen. Active app: {active_app}
 
 The user asks: "{question}"
 
@@ -125,7 +116,7 @@ def analyze_code_on_screen(instruction: str = "Help me with this code") -> str:
 
     active_app = _get_active_app()
 
-    prompt = f"""You are looking at code on a Mac screen. Active app: {active_app}
+    prompt = f"""You are looking at code on a desktop screen. Active app: {active_app}
 The user says: "{instruction}"
 
 1. READ the code carefully — identify the language. Quote relevant lines.

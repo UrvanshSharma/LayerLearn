@@ -6,7 +6,6 @@ Optimised for speed: JPEG compression, in-memory, auto-cleanup.
 
 from __future__ import annotations
 
-import subprocess
 import time
 from datetime import datetime
 from typing import Optional, Tuple
@@ -16,6 +15,7 @@ from PIL import Image
 
 from config import settings, ASSETS_DIR
 from core.logger import get_logger
+from core.window_utils import get_front_window_bounds
 
 log = get_logger(__name__)
 
@@ -45,50 +45,12 @@ def _point_in_monitor(x: int, y: int, monitor: dict) -> bool:
     return left <= x < right and top <= y < bottom
 
 
-def _front_window_bounds() -> Optional[Tuple[int, int, int, int]]:
-    """
-    Get the frontmost window bounds from macOS as (x, y, width, height).
-    Returns None when unavailable (permissions, no front window, etc.).
-    """
-    script = """
-    tell application "System Events"
-        set frontProc to first application process whose frontmost is true
-        tell front window of frontProc
-            set {xPos, yPos} to position
-            set {w, h} to size
-        end tell
-        return (xPos as text) & "," & (yPos as text) & "," & (w as text) & "," & (h as text)
-    end tell
-    """
-    try:
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=1.5,
-            check=False,
-        )
-        raw = result.stdout.strip()
-        if not raw:
-            return None
-
-        parts = [p.strip() for p in raw.split(",")]
-        if len(parts) != 4:
-            return None
-        x, y, w, h = (int(float(p)) for p in parts)
-        if w <= 0 or h <= 0:
-            return None
-        return x, y, w, h
-    except Exception:
-        return None
-
-
 def _active_monitor(sct: mss.mss) -> Optional[dict]:
     """
     Resolve which monitor currently contains the active/frontmost window.
     Falls back to None when unavailable.
     """
-    bounds = _front_window_bounds()
+    bounds = get_front_window_bounds()
     if not bounds:
         return None
 

@@ -1,6 +1,6 @@
 # LayerLearn
 
-LayerLearn is a real-time voice assistant for macOS that can:
+LayerLearn is a real-time voice assistant for desktop (macOS + Windows) that can:
 
 - Listen with push-to-talk (`SPACE`)
 - Understand your request with local LLM reasoning (Ollama)
@@ -22,7 +22,7 @@ It is designed as a practical desktop copilot for coding and everyday workflows.
 - Smart intent + tool routing:
   - Fast regex-based intent detection for common requests
   - LLM fallback for general conversations
-- macOS automation:
+- Desktop automation:
   - Open apps/URLs, search web, type text, key presses, system controls
 - Safety layer:
   - Confirmation required for destructive actions (writing files, commands, typing, etc.)
@@ -82,7 +82,7 @@ LayerLearn-1/
 
 ## Requirements
 
-- macOS (project uses AppleScript + `open` commands)
+- macOS or Windows 10/11
 - Python 3.9+
 - Ollama installed and running
 - Microphone + screen recording permissions enabled
@@ -108,6 +108,13 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
+Windows (PowerShell):
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
 ### 3. Install Python dependencies
 
 ```bash
@@ -119,6 +126,12 @@ pip install -r requirements.txt
 
 ```bash
 brew install ffmpeg portaudio ollama
+```
+
+Windows (PowerShell, with Chocolatey):
+
+```powershell
+choco install ollama ffmpeg -y
 ```
 
 ### 5. Start Ollama and pull models
@@ -140,6 +153,12 @@ ollama pull llama3.2-vision
 cp .env.example .env
 ```
 
+Windows (PowerShell):
+
+```powershell
+Copy-Item .env.example .env
+```
+
 Edit `.env` as needed.
 
 ### 7. Run LayerLearn
@@ -150,10 +169,22 @@ Voice mode:
 python3 main.py
 ```
 
+Windows:
+
+```powershell
+python main.py
+```
+
 Text mode:
 
 ```bash
 python3 main.py --text
+```
+
+Windows:
+
+```powershell
+python main.py --text
 ```
 
 Debug logging:
@@ -162,16 +193,28 @@ Debug logging:
 python3 main.py --debug
 ```
 
-## macOS Permissions (Important)
+Windows:
 
-Grant these to your terminal app (Terminal/iTerm) and Python runtime:
+```powershell
+python main.py --debug
+```
+
+## Permissions (Important)
+
+Grant these to your terminal app and Python runtime:
 
 - Microphone
 - Screen Recording
-- Accessibility (for keyboard automation and some window queries)
-- Automation (when prompted for System Events / AppleScript control)
+- Accessibility / Input control (for keyboard automation)
+- Automation permissions when prompted
 
-Path: `System Settings -> Privacy & Security`
+macOS path: `System Settings -> Privacy & Security`
+
+Windows path:
+
+- Microphone: `Settings -> Privacy & security -> Microphone`
+- Notifications: `Settings -> System -> Notifications`
+- Run terminal as needed with sufficient access for automation scenarios
 
 After changing permissions, fully restart terminal/python process.
 
@@ -256,12 +299,11 @@ pytest -q
 
 ### 5) Automation actions fail
 
-- Grant Accessibility + Automation permissions
-- Some actions depend on frontmost app allowing script control
+- Grant required OS permissions for input/screen access
+- Some actions depend on the target app allowing focus and scripted control
 
 ## Notes
 
-- This project is currently macOS-first.
-- Most automation tools rely on AppleScript/system commands available on macOS.
-- For Linux/Windows support, system tool implementations would need OS-specific adapters.
-
+- macOS and Windows are supported.
+- Linux has partial support with best-effort fallbacks.
+- For best results on Windows/macOS, run in a normal desktop session (not headless/remote-only).
