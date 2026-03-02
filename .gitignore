@@ -5,13 +5,22 @@ __pycache__/
 # Virtual environment
 venv/
 .env/
+.venv/
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# Temp screenshots
-assets/temp_screenshot.png
+# Screenshots (auto-generated)
+assets/screenshot_*.png
 
-# API keys
+# API keys / local config
+.env
 config_local.py
+
+# Logs
+logs/
+
+# IDE
+.vscode/
+.idea/
