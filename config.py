@@ -36,13 +36,13 @@ class LLMConfig:
 @dataclass
 class AudioConfig:
     """Voice pipeline settings."""
-    stt_model_size: str = os.getenv("STT_MODEL_SIZE", "base")
+    stt_model_size: str = os.getenv("STT_MODEL_SIZE", "small")
     stt_language: str = os.getenv("STT_LANGUAGE", "en")
     tts_voice: str = os.getenv("TTS_VOICE", "en-US-AriaNeural")
     tts_rate: str = os.getenv("TTS_RATE", "+20%")  # faster speech for snappier feel
     sample_rate: int = 16_000
     channels: int = 1
-    push_to_talk_key: str = os.getenv("PTT_KEY", "space")
+    push_to_talk_key: str = os.getenv("PTT_KEY", "shift")
 
 
 @dataclass

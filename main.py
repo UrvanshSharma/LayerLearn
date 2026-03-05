@@ -54,26 +54,24 @@ BANNER = """[bold cyan]
 # ── Text Mode ────────────────────────────────────────────────────────────
 
 async def run_text_mode(agent: Agent) -> None:
-    console.print(BANNER)
-    console.print("[bold green]Text mode active.[/bold green] Type your messages:\n")
+
+    
 
     while True:
         try:
-            user_input = input("You > ").strip()
+            user_input = await asyncio.to_thread(input, "Text > ")
+            user_input = user_input.strip()
         except (EOFError, KeyboardInterrupt):
-            console.print("\n[yellow]Goodbye! 👋[/yellow]")
             break
 
         if not user_input:
             continue
         if user_input.lower() in {"quit", "exit", "q"}:
-            console.print("[yellow]Goodbye! 👋[/yellow]")
             break
         if user_input.lower() == "reset":
             agent.reset()
             console.print("[yellow]Memory cleared ✓[/yellow]\n")
             continue
-
         console.print("[dim]Thinking…[/dim]")
         try:
             response = await agent.process(user_input)
@@ -97,14 +95,9 @@ async def run_voice_mode(agent: Agent) -> None:
     from core.voice_controller import VoiceController
     from core.tts import speak
 
-    console.print(BANNER)
-    console.print(
-        f"[bold green]🎤 Voice mode active.[/bold green] "
-        f"Hold [bold yellow]SPACE[/bold yellow] to talk.\n"
-    )
-
+    
     # Announce ready
-    await speak("LayerLearn is ready. Hold space to talk to me.")
+    await speak("LayerLearn is ready. Hold shift to talk to me.")
 
     async def on_transcript(text: str) -> str:
         console.print(f"\n[bold green]You:[/bold green] {text}")
@@ -146,27 +139,25 @@ async def run_voice_mode(agent: Agent) -> None:
 # ── Main ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="LayerLearn Voice Agent")
-    parser.add_argument("--text", action="store_true", help="Text mode")
-    parser.add_argument("--debug", action="store_true", help="Debug logging")
-    args = parser.parse_args()
-
-    if args.debug:
-        settings.debug = True
-
+    console.print(BANNER)
     console.print("[dim]Initialising agent…[/dim]")
+
     agent = Agent()
-    console.print("[dim]Ready! ✓[/dim]\n")
+
+    console.print("[green]Ready![/green]")
+    console.print("🎤 Hold SHIFT to talk | Text > type commands\n")
+
+    async def run_both():
+        await asyncio.gather(
+            run_voice_mode(agent),
+            run_text_mode(agent)
+        )
 
     try:
-        if args.text:
-            asyncio.run(run_text_mode(agent))
-        else:
-            asyncio.run(run_voice_mode(agent))
+        asyncio.run(run_both())
     except KeyboardInterrupt:
         console.print("\n[yellow]Goodbye! 👋[/yellow]")
         sys.exit(0)
-
 
 if __name__ == "__main__":
     main()

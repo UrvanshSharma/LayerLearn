@@ -204,18 +204,27 @@ class Agent:
         self._warmup()
 
     def _warmup(self) -> None:
-        """Keep models loaded in GPU for instant responses."""
-        for model, label in [(settings.llm.text_model, "Text"), (settings.llm.vision_model, "Vision")]:
-            try:
-                ollama.chat(
-                    model=model,
-                    messages=[{"role": "user", "content": "hi"}],
-                    options={"num_predict": 1},
-                    keep_alive=settings.llm.keep_alive,
-                )
-                log.info("✓ {} model warm", label)
-            except Exception:
-                log.warning("Could not warm {} model", label)
+        """Keep models loaded for faster responses."""
+    import threading
+
+    def warm(model, label):
+        try:
+            ollama.chat(
+                model=model,
+                messages=[{"role": "user", "content": "hi"}],
+                options={"num_predict": 1},
+                keep_alive=settings.llm.keep_alive,
+            )
+            log.info("✓ {} model warm", label)
+        except Exception as e:
+            log.warning("Could not warm {} model: {}", label, e)
+
+    for model, label in [
+        (settings.llm.text_model, "Text"),
+        (settings.llm.vision_model, "Vision"),
+    ]:
+        t = threading.Thread(target=warm, args=(model, label), daemon=True)
+        t.start()
 
     # ── Public API ───────────────────────────────────────────────────────
 
