@@ -1,309 +1,244 @@
 # LayerLearn
 
-LayerLearn is a real-time voice assistant for desktop (macOS + Windows) that can:
+LayerLearn is a desktop AI copilot with voice + text interaction, screen understanding, and safe tool execution.
 
-- Listen with push-to-talk (`SPACE`)
-- Understand your request with local LLM reasoning (Ollama)
-- See your active screen and analyze code/UI issues
-- Execute safe desktop tools (open apps, search web, read files, etc.)
-- Reply using text-to-speech
+It now uses Google Gemma/Gemini API by default, with Ollama fallback support.
 
-It is designed as a practical desktop copilot for coding and everyday workflows.
+## Will It Run On Windows?
 
-## Features
+Yes. The current codebase includes explicit Windows support for:
 
-- Real-time voice loop:
-  - Hold `SPACE` to record
-  - Release to transcribe + process
-  - Get spoken response
-- Screen understanding:
-  - Captures the monitor containing the active/frontmost window
-  - Vision analysis for UI, code, and errors
-- Smart intent + tool routing:
-  - Fast regex-based intent detection for common requests
-  - LLM fallback for general conversations
-- Desktop automation:
-  - Open apps/URLs, search web, type text, key presses, system controls
-- Safety layer:
-  - Confirmation required for destructive actions (writing files, commands, typing, etc.)
-- Persistent preferences + memory:
-  - Remembers choices like preferred browser
-  - Keeps short conversation context
-- Structured logs for debugging
+- Active window detection and bounds
+- Browser/app opening
+- Input and automation flows
+- Voice, TTS, screen capture, and tool orchestration
 
-## How It Works
+Supported platforms:
 
-1. Audio input is recorded via `sounddevice` while push-to-talk key is held.
-2. Audio is transcribed by `faster-whisper`.
-3. `Agent` processes text:
-   - Fast intent detection for common commands
-   - Smart resolver for ambiguous open/app/web requests
-   - LLM reasoning fallback
-4. If needed, tools execute (screen capture, system actions, file ops, etc.).
-5. For screen tasks:
-   - Screenshot is captured via `mss`
-   - Vision model analyzes image through Ollama
-6. Response is summarized and spoken via `edge-tts` + `sounddevice`.
+- Windows 10/11: Fully supported
+- macOS: Fully supported
+- Linux: Best-effort/partial support
 
-## Tech Stack
+## Key Features
 
-- Python
-- Ollama (text + vision models)
-- `faster-whisper` (STT)
-- `edge-tts` (TTS)
-- `mss` + `Pillow` (screen capture + image handling)
-- `pynput` (push-to-talk hotkey)
-- `loguru` + `rich` (logging + terminal UI)
+- Push-to-talk voice assistant (default key: Shift)
+- Parallel text console mode in the same process
+- Screen capture + vision reasoning
+- Tool execution with safety confirmations for risky actions
+- Smart app/web/file intent resolution
+- Session memory + user preference memory
 
-## Project Structure
+## Updated Project Structure
 
 ```text
-LayerLearn-1/
+LayerLearn/
 ├── main.py
+├── gui.py
 ├── config.py
 ├── requirements.txt
+├── .env.example
+├── GEMMA_SETUP.md
+├── QUICKSTART_GEMMA.md
+├── SETUP_CHECKLIST.md
 ├── core/
 │   ├── agent.py
 │   ├── brain.py
+│   ├── context_memory.py
+│   ├── gemma_client.py
 │   ├── memory.py
+│   ├── platform_utils.py
+│   ├── screen_capture.py
 │   ├── smart_resolver.py
-│   ├── safety.py
 │   ├── stt.py
 │   ├── tts.py
 │   ├── vision.py
-│   ├── screen_capture.py
 │   ├── voice_controller.py
+│   ├── window_utils.py
 │   └── tools/
+│       ├── automation_tools.py
+│       ├── communication_tools.py
+│       ├── file_tools.py
+│       ├── screen_tools.py
+│       ├── system_tools.py
+│       └── utility_tools.py
 ├── tests/
-├── assets/            # screenshots
-├── logs/              # runtime logs
-└── .env.example
+├── assets/
+└── logs/
 ```
 
-## Requirements
+## Prerequisites
 
-- macOS or Windows 10/11
-- Python 3.9+
-- Ollama installed and running
-- Microphone + screen recording permissions enabled
+- Python 3.10+
+- Microphone enabled
+- Screen recording permissions enabled
+- ffmpeg installed (required for TTS audio path)
 
-Recommended system dependencies:
+Optional:
 
-- `ffmpeg` (needed by `pydub` for MP3 decode in TTS path)
-- `portaudio` (if `sounddevice` build/runtime needs it)
+- Ollama (only needed when you set LLM_BACKEND=ollama or when using fallback)
 
-## Quick Start
+## Setup And Run
 
-### 1. Clone the repo
+### 1) Clone
 
 ```bash
 git clone https://github.com/UrvanshSharma/LayerLearn
-cd LayerLearn-1
+cd LayerLearn
 ```
 
-### 2. Create and activate virtual environment
+### 2) Create virtual environment
+
+macOS/Linux:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-Windows (PowerShell):
+Windows PowerShell:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 3. Install Python dependencies
+Windows CMD:
+
+```cmd
+python -m venv .venv
+.venv\Scripts\activate.bat
+```
+
+### 3) Install dependencies
+
+macOS/Linux:
 
 ```bash
-pip install --upgrade pip
+python3 -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 4. Install system dependencies (recommended)
-
-```bash
-brew install ffmpeg portaudio ollama
-```
-
-Windows (PowerShell, with Chocolatey):
+Windows PowerShell:
 
 ```powershell
-choco install ollama ffmpeg -y
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-### 5. Start Ollama and pull models
+### 4) Install OS packages
+
+macOS (Homebrew):
 
 ```bash
-ollama serve
+brew install ffmpeg portaudio
 ```
 
-In another terminal:
+Windows (winget):
+
+```powershell
+winget install Gyan.FFmpeg
+```
+
+If you use Ollama backend/fallback locally:
 
 ```bash
 ollama pull llama3.2
 ollama pull llama3.2-vision
 ```
 
-### 6. Configure environment
+### 5) Configure environment
+
+macOS/Linux:
 
 ```bash
 cp .env.example .env
 ```
 
-Windows (PowerShell):
+Windows PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Edit `.env` as needed.
+Edit .env and set at minimum:
 
-### 7. Run LayerLearn
-
-Voice mode:
-
-```bash
-python3 main.py
+```env
+LLM_BACKEND=gemma
+GOOGLE_API_KEY=your_api_key_here
+GEMMA_MODEL=gemini-2.0-flash
 ```
 
-Windows:
+### 6) Run
 
-```powershell
+All modes are started together by the same command:
+
+```bash
 python main.py
 ```
 
-Text mode:
+What you get:
 
-```bash
-python3 main.py --text
-```
+- Voice mode: hold Shift to talk, release to process
+- Text mode: type commands at the Text > prompt
 
-Windows:
+Note: current main.py does not use CLI flags like --text or --debug.
 
-```powershell
-python main.py --text
-```
+## Useful Commands Inside LayerLearn
 
-Debug logging:
+- what's on my screen
+- help me debug this code
+- open chrome
+- open youtube in edge
+- read file main.py
+- what app is active
+- reset
 
-```bash
-python3 main.py --debug
-```
+## Windows Permissions Checklist
 
-Windows:
+- Settings > Privacy & security > Microphone
+- Settings > Privacy & security > Screen capture (if required by your environment)
+- Run terminal with permissions needed for automation actions
 
-```powershell
-python main.py --debug
-```
+After changing permissions, restart your terminal and rerun python main.py.
 
-## Permissions (Important)
+## Logs And Diagnostics
 
-Grant these to your terminal app and Python runtime:
+- Runtime logs: logs/layerlearn_YYYY-MM-DD.log
+- Safety audit: logs/safety_audit.jsonl
+- Vision screenshots: assets/screenshot_*.png
 
-- Microphone
-- Screen Recording
-- Accessibility / Input control (for keyboard automation)
-- Automation permissions when prompted
-
-macOS path: `System Settings -> Privacy & Security`
-
-Windows path:
-
-- Microphone: `Settings -> Privacy & security -> Microphone`
-- Notifications: `Settings -> System -> Notifications`
-- Run terminal as needed with sufficient access for automation scenarios
-
-After changing permissions, fully restart terminal/python process.
-
-## Usage Examples
-
-- `"what's on my screen"`
-- `"look at this"`
-- `"a serious problem on the screen"`
-- `"help me debug this code"`
-- `"open youtube"`
-- `"open whatsapp in chrome"`
-- `"what app is active"`
-- `"read main.py"`
-- `"what time is it"`
-- `"reset"`
-
-## Configuration
-
-You can set these in `.env`:
-
-- `OLLAMA_HOST`
-- `OLLAMA_TEXT_MODEL`
-- `OLLAMA_VISION_MODEL`
-- `OLLAMA_TEMPERATURE`
-- `OLLAMA_MAX_TOKENS`
-- `STT_MODEL_SIZE`
-- `STT_LANGUAGE`
-- `TTS_VOICE`
-- `TTS_RATE`
-- `PTT_KEY`
-- `MAX_MEMORY_TURNS`
-- `DEBUG`
-
-If not set, defaults are loaded from `config.py`.
-
-## Safety Model
-
-The assistant asks for confirmation before potentially destructive actions, including:
-
-- Writing files
-- Running shell commands
-- Typing text / keyboard shortcuts
-- Drafting emails
-- Quitting apps / lock/sleep/trash actions
-
-## Logs and Debugging
-
-- Main logs: `logs/layerlearn_YYYY-MM-DD.log`
-- Safety audit log: `logs/safety_audit.jsonl` (if safety actions are used)
-- Screenshots for vision tasks: `assets/screenshot_*.png`
-
-## Run Tests
+Run tests:
 
 ```bash
 pytest -q
 ```
 
-## Troubleshooting
+## Common Issues
 
-### 1) `Failed to connect to Ollama` / model errors
+1. Gemma API key errors
 
-- Ensure Ollama is running: `ollama serve`
-- Ensure models are pulled:
-  - `ollama pull llama3.2`
-  - `ollama pull llama3.2-vision`
-- Verify `OLLAMA_HOST` in `.env`
+- Ensure .env exists
+- Ensure GOOGLE_API_KEY is set
+- Restart process after editing .env
 
-### 2) Screen capture not working
+2. Ollama fallback errors
 
-- Grant Screen Recording permission
-- Restart terminal/python process after granting permission
+- Start ollama serve
+- Pull required models
+- Verify OLLAMA_HOST
 
-### 3) Voice input not detected
+3. No audio/TTS
 
-- Grant Microphone permission
-- Check input device in macOS Sound settings
+- Check speaker output
+- Confirm ffmpeg is installed
 
-### 4) TTS issues / no audio
+4. Screen capture or automation fails
 
-- Ensure speakers/headphones are active
-- Install `ffmpeg` (`brew install ffmpeg`)
+- Grant OS permissions (microphone/screen/accessibility)
+- Retry in a normal desktop session (not headless)
 
-### 5) Automation actions fail
+## Additional Docs
 
-- Grant required OS permissions for input/screen access
-- Some actions depend on the target app allowing focus and scripted control
-
-## Notes
-
-- macOS and Windows are supported.
-- Linux has partial support with best-effort fallbacks.
-- For best results on Windows/macOS, run in a normal desktop session (not headless/remote-only).
+- GEMMA_SETUP.md
+- QUICKSTART_GEMMA.md
+- SETUP_CHECKLIST.md
