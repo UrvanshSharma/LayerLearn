@@ -35,12 +35,23 @@ def _get_model() -> WhisperModel:
             settings.audio.stt_model_size,
             device="cpu",
             compute_type="int8",
-            cpu_threads=6
+            cpu_threads=6,
         )
 
         log.info("Whisper model loaded ✓")
 
     return _model
+
+
+# Common words/names the user is likely to say — helps Whisper accuracy
+_INITIAL_PROMPT = (
+    "LayerLearn Chrome YouTube WhatsApp Spotify Instagram Facebook "
+    "Twitter GitHub VS Code Terminal Safari Firefox Slack Discord "
+    "open close search screen code debug fix help "
+    "file folder email message screenshot volume "
+    "calculator calendar settings dark mode brightness "
+    "copy paste undo redo save quit "
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -107,6 +118,10 @@ def transcribe(audio: np.ndarray) -> str:
             language=settings.audio.stt_language,
             beam_size=5,
             vad_filter=True,
+            initial_prompt=_INITIAL_PROMPT,
+            condition_on_previous_text=False,
+            log_prob_threshold=-0.8,
+            no_speech_threshold=0.5,
         )
 
         text = " ".join(seg.text.strip() for seg in segments)

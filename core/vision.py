@@ -2,7 +2,8 @@
 Vision Analysis — Precise & Fast
 ==================================
 Multimodal screen understanding with structured output.
-The prompts are designed to force the LLM to give PRECISE, USEFUL descriptions.
+Supports both Ollama and Google Gemma API backends.
+Defaults to Gemma 4 for superior speed and accuracy.
 """
 
 from __future__ import annotations
@@ -10,7 +11,6 @@ from __future__ import annotations
 import base64
 from io import BytesIO
 
-import ollama
 from PIL import Image
 
 from config import settings
@@ -20,35 +20,47 @@ from core.window_utils import get_front_app_name
 log = get_logger(__name__)
 
 
-def _image_to_base64(img: Image.Image) -> str:
-    """Downscale + compress image for fast inference."""
-    max_w = settings.agent.screen_max_width
-    if img.width > max_w:
-        ratio = max_w / img.width
-        img = img.resize((max_w, int(img.height * ratio)), Image.LANCZOS)
-
-    buf = BytesIO()
-    img.save(buf, format="JPEG", quality=settings.agent.screen_capture_quality)
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
-
-
-def _get_active_app() -> str:
-    """Get the currently active app name for context."""
-    return get_front_app_name() or "Unknown"
+def _use_gemma() -> bool:
+    """Check if Gemma backend is configured and enabled."""
+    return (
+        settings.llm.backend.lower() == "gemma"
+        and settings.llm.google_api_key
+    )
 
 
 def analyze_image(
     image: Image.Image | str,
     prompt: str = "Describe this screen.",
 ) -> str:
-    """Fast multimodal analysis."""
+    """Fast multimodal analysis using Gemma or Ollama."""
     if isinstance(image, str):
         image = Image.open(image)
 
-    b64 = _image_to_base64(image)
     log.info("👁  Vision: '{}' …", prompt[:60])
 
+    # Try Gemma first if configured
+    if _use_gemma():
+        try:
+            from core.gemma_client import get_gemma_client
+            client = get_gemma_client()
+            return client.analyze_image(image, prompt)
+        except Exception as e:
+            log.warning("Gemma vision failed, falling back to Ollama: {}", e)
+    
+    # Fallback to Ollama
     try:
+        import ollama
+        from core.screen_capture import capture_full_screen
+        
+        max_w = settings.agent.screen_max_width
+        if image.width > max_w:
+            ratio = max_w / image.width
+            image = image.resize((max_w, int(image.height * ratio)), Image.LANCZOS)
+
+        buf = BytesIO()
+        image.save(buf, format="JPEG", quality=settings.agent.screen_capture_quality)
+        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
         response = ollama.chat(
             model=settings.llm.vision_model,
             messages=[{
@@ -57,8 +69,8 @@ def analyze_image(
                 "images": [b64],
             }],
             options={
-                "temperature": 0.2,  # low temp for precise descriptions
-                "num_predict": 512,  # keep it concise
+                "temperature": 0.2,
+                "num_predict": 512,
             },
             keep_alive=settings.llm.keep_alive,
         )
@@ -73,9 +85,9 @@ def analyze_image(
 def analyze_screen(prompt: str | None = None) -> str:
     """Capture screen + analyze with context about active app."""
     from core.screen_capture import capture_full_screen
-    img, path = capture_full_screen()
 
-    active_app = _get_active_app()
+    img, path = capture_full_screen()
+    active_app = get_front_app_name() or "Unknown"
 
     if prompt is None:
         prompt = f"""You are looking at a desktop screen. The active/frontmost app is: {active_app}
@@ -88,15 +100,16 @@ Describe EXACTLY what you see. Be SPECIFIC and PRECISE:
 5. What buttons or interactive elements are visible?
 
 Be direct and factual. Don't say "it appears" — say what IS there."""
+    
     return analyze_image(img, prompt)
 
 
 def analyze_screen_with_question(question: str) -> str:
     """Capture screen + answer a specific question."""
     from core.screen_capture import capture_full_screen
-    img, path = capture_full_screen()
 
-    active_app = _get_active_app()
+    img, path = capture_full_screen()
+    active_app = get_front_app_name() or "Unknown"
 
     prompt = f"""You are looking at a desktop screen. Active app: {active_app}
 
@@ -112,9 +125,9 @@ Do NOT guess — describe only what you can see."""
 def analyze_code_on_screen(instruction: str = "Help me with this code") -> str:
     """Capture screen → understand code → give guidance."""
     from core.screen_capture import capture_full_screen
-    img, path = capture_full_screen()
 
-    active_app = _get_active_app()
+    img, path = capture_full_screen()
+    active_app = get_front_app_name() or "Unknown"
 
     prompt = f"""You are looking at code on a desktop screen. Active app: {active_app}
 The user says: "{instruction}"
@@ -132,6 +145,7 @@ Be precise — quote actual code and error messages from the screen."""
 def generate_code_from_screen(instruction: str) -> str:
     """Capture screen → generate code fix/patch."""
     from core.screen_capture import capture_full_screen
+
     img, path = capture_full_screen()
 
     prompt = f"""Look at the code on screen. The user says: "{instruction}"
@@ -145,6 +159,7 @@ Add brief comments on what changed and why."""
 def read_screen_text() -> str:
     """Capture screen and extract all visible text."""
     from core.screen_capture import capture_full_screen
+
     img, path = capture_full_screen()
 
     prompt = (

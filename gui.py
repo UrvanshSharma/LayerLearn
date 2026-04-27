@@ -1,286 +1,287 @@
+"""
+LayerLearn GUI — Native Window Voice Agent
+===========================================
+Run:  python3 gui.py
+Opens a native window (NOT a browser tab).
+"""
 
-import tkinter as tk
-from tkinter import ttk
-import threading
+from __future__ import annotations
+
 import asyncio
+import json
+import threading
 import traceback
+import time
+
+import webview  # pywebview — native OS window
+
+from core.agent import Agent
+from core.voice_controller import VoiceController
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 
-# ───────────── Splash Screen ─────────────
+# ── Shared state ─────────────────────────────────────────────────────────
 
-class SplashScreen:
-
-    def __init__(self):
-
-        self.root = tk.Tk()
-        self.root.title("LayerLearn")
-        self.root.geometry("500x300")
-        self.root.resizable(False, False)
-
-        container = tk.Frame(self.root)
-        container.pack(expand=True)
-
-        title = tk.Label(
-            container,
-            text="🧠 LayerLearn",
-            font=("Segoe UI", 20, "bold")
-        )
-        title.pack(pady=(0, 10))
-
-        self.status = tk.Label(
-            container,
-            text="Starting...",
-            font=("Segoe UI", 11)
-        )
-        self.status.pack(pady=(0, 15))
-
-        self.progress = ttk.Progressbar(
-            container,
-            orient="horizontal",
-            length=260,
-            mode="determinate"
-        )
-
-        self.progress.pack()
-
-    def set_status(self, text, value):
-
-        def update():
-            self.status.config(text=text)
-            self.progress["value"] = value
-
-        self.root.after(0, update)
-
-    def close(self):
-        self.root.after(0, self.root.destroy)
+agent: Agent | None = None
+messages: list[dict] = []
+status_state = {"text": "Starting…", "color": "#ffaa33"}
+_window: webview.Window | None = None
 
 
-# ───────────── Main GUI ─────────────
+def add_msg(role: str, text: str):
+    messages.append({"role": role, "text": text, "ts": time.time()})
+    # Push to UI
+    if _window:
+        safe = json.dumps(text)
+        try:
+            _window.evaluate_js(f'addMsg("{role}", {safe})')
+        except Exception:
+            pass
 
-class LayerLearnGUI:
 
-    def __init__(self, root, agent, voice_controller):
+def set_status(text: str, color: str = "#7cffb2"):
+    status_state["text"] = text
+    status_state["color"] = color
+    if _window:
+        try:
+            _window.evaluate_js(f'setStatus("{text}", "{color}")')
+        except Exception:
+            pass
 
-        self.root = root
-        self.agent = agent
-        self.voice_controller_class = voice_controller
 
-        self.root.title("LayerLearn Voice Agent 🧠")
-        self.root.geometry("650x520")
-        self.root.configure(bg="#1e1e1e")
+# ── JS API exposed to the webview ────────────────────────────────────────
 
-        # ───────── Chat area ─────────
+class Api:
+    def send(self, text: str) -> str:
+        if not text.strip() or agent is None:
+            return json.dumps({"response": "Agent not ready."})
 
-        chat_frame = tk.Frame(root, bg="#1e1e1e")
-        chat_frame.pack(side="top", fill="both", expand=True, padx=10, pady=(10, 0))
+        if text.strip().lower() in {"reset", "clear"}:
+            agent.reset()
+            messages.clear()
+            return json.dumps({"response": "__RESET__"})
 
-        self.text = tk.Text(
-            chat_frame,
-            bg="#121212",
-            fg="#e6e6e6",
-            insertbackground="white",
-            wrap="word",
-            font=("Segoe UI", 10),
-            relief="flat",
-            padx=10,
-            pady=10
-        )
+        add_msg("user", text)
+        set_status("Thinking…", "#ffaa33")
 
-        self.text.pack(fill="both", expand=True)
+        try:
+            loop = asyncio.new_event_loop()
+            response = loop.run_until_complete(agent.process(text))
+            loop.close()
+        except Exception as e:
+            response = f"Error: {e}"
+            traceback.print_exc()
 
-        # message colors
-        self.text.tag_config("user", foreground="#4ea1ff")
-        self.text.tag_config("ai", foreground="#7cffb2")
-        self.text.tag_config("system", foreground="#aaaaaa")
-        self.text.tag_config("thinking", foreground="#ffaa33")
+        add_msg("ai", response)
+        set_status("Ready", "#7cffb2")
 
-        self.text.config(state="disabled")
+        # TTS in background
+        threading.Thread(target=_speak_bg, args=(response,), daemon=True).start()
 
-        # ───────── Input bar ─────────
+        return json.dumps({"response": response})
 
-        input_frame = tk.Frame(root, bg="#1e1e1e", height=60)
-        input_frame.pack(side="bottom", fill="x", padx=10, pady=10)
-        input_frame.pack_propagate(False)
 
-        self.entry = tk.Entry(
-            input_frame,
-            bg="#2a2a2a",
-            fg="white",
-            insertbackground="white",
-            relief="flat",
-            font=("Segoe UI", 10)
-        )
+def _speak_bg(text: str):
+    try:
+        from core.tts import speak
+        asyncio.run(speak(text))
+    except Exception:
+        pass
 
-        self.entry.pack(side="left", fill="x", expand=True, padx=(0, 10), ipady=8)
 
-        send_btn = tk.Button(
-            input_frame,
-            text="Send",
-            bg="#3a7afe",
-            fg="white",
-            relief="flat",
-            command=self.send
-        )
+# ── HTML ─────────────────────────────────────────────────────────────────
 
-        send_btn.pack(side="right")
+HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: #0d0d0d; color: #e0e0e0;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .header {
+    background: linear-gradient(135deg, #141414, #1a1a2e);
+    border-bottom: 1px solid #2a2a2a;
+    padding: 12px 20px; display: flex; align-items: center; justify-content: space-between;
+    -webkit-app-region: drag;
+  }
+  .logo { font-size: 18px; font-weight: 700; color: #4ea1ff; }
+  .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #7cffb2; -webkit-app-region: no-drag; }
+  .status-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: #7cffb2;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .voice-hint { color:#555; font-size:11px; background:#1a1a1a; padding:3px 8px; border-radius:10px; border:1px solid #2a2a2a; -webkit-app-region: no-drag; }
 
-        self.entry.bind("<Return>", self.send)
+  .chat {
+    flex:1; overflow-y:auto; padding:16px 20px;
+    display:flex; flex-direction:column; gap:10px; scroll-behavior:smooth;
+  }
+  .chat::-webkit-scrollbar{width:5px}
+  .chat::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
 
-        # placeholder text
-        self.entry.insert(0, "Type a message...")
-        self.entry.bind("<FocusIn>", self.clear_placeholder)
-        self.entry.bind("<FocusOut>", self.restore_placeholder)
+  .msg {
+    max-width:82%; padding:10px 14px; border-radius:14px;
+    font-size:13px; line-height:1.55; white-space:pre-wrap;
+    animation: fadeIn .25s ease;
+  }
+  @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  .msg.user{align-self:flex-end;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border-bottom-right-radius:4px}
+  .msg.ai{align-self:flex-start;background:#1a1a2e;border:1px solid #2a2a3e;border-bottom-left-radius:4px}
+  .msg.system{align-self:center;background:transparent;color:#555;font-size:11px;padding:3px 10px}
+  .msg.thinking{align-self:flex-start;background:#1a1a1a;border:1px solid #333;color:#ffaa33;font-size:12px}
+  .msg.error{align-self:flex-start;background:#2a1515;border:1px solid #4a2020;color:#ff6b6b}
+  .msg-label{font-size:10px;font-weight:600;margin-bottom:3px;opacity:.7}
+  .msg.user .msg-label{color:#93c5fd} .msg.ai .msg-label{color:#7cffb2}
 
-        self.add_message("System", "LayerLearn ready.", "system")
+  .input-bar {
+    padding:12px 20px; background:#111; border-top:1px solid #222;
+    display:flex; gap:8px;
+  }
+  .input-bar input {
+    flex:1; background:#1a1a1a; border:1px solid #2a2a2a; color:#fff;
+    padding:12px 16px; border-radius:10px; font-size:13px;
+    font-family:'Inter',sans-serif; outline:none; transition:border-color .2s;
+  }
+  .input-bar input:focus{border-color:#4ea1ff}
+  .input-bar input::placeholder{color:#444}
+  .input-bar button {
+    background:linear-gradient(135deg,#4ea1ff,#2563eb); color:#fff; border:none;
+    padding:12px 20px; border-radius:10px; font-size:13px; font-weight:600;
+    cursor:pointer; font-family:'Inter',sans-serif; transition:transform .1s;
+  }
+  .input-bar button:hover{opacity:.9} .input-bar button:active{transform:scale(.97)}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">🧠 LayerLearn</div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <div class="voice-hint">🎤 Hold SHIFT to talk</div>
+    <div class="status"><div class="status-dot" id="dot"></div><span id="stxt">Starting…</span></div>
+  </div>
+</div>
+<div class="chat" id="chat"></div>
+<div class="input-bar">
+  <input id="inp" placeholder="Type a message…" autocomplete="off"/>
+  <button onclick="send()">Send ⏎</button>
+</div>
+<script>
+const chat=document.getElementById('chat'), inp=document.getElementById('inp');
+inp.addEventListener('keydown',e=>{if(e.key==='Enter')send()});
 
-        threading.Thread(target=self.start_voice, daemon=True).start()
+function addMsg(role,text){
+  const d=document.createElement('div');d.className='msg '+role;
+  const labels={user:'You',ai:'🧠 LayerLearn',system:'System',thinking:'🧠',error:'Error'};
+  if(role!=='system'){const l=document.createElement('div');l.className='msg-label';l.textContent=labels[role]||role;d.appendChild(l)}
+  const c=document.createElement('div');c.textContent=text;d.appendChild(c);
+  chat.appendChild(d);chat.scrollTop=chat.scrollHeight;
+  return d;
+}
+function setStatus(t,c){document.getElementById('stxt').textContent=t;document.getElementById('dot').style.background=c}
 
-    # ───────── placeholder helpers ─────────
+let thinkEl=null;
+function send(){
+  const t=inp.value.trim();if(!t)return;inp.value='';
+  if(t.toLowerCase()==='reset'||t.toLowerCase()==='clear'){
+    pywebview.api.send(t);addMsg('system','Memory cleared ✓');return;
+  }
+  addMsg('user',t);
+  thinkEl=addMsg('thinking','Thinking…');
+  setStatus('Thinking…','#ffaa33');
 
-    def clear_placeholder(self, event):
+  pywebview.api.send(t).then(r=>{
+    if(thinkEl){thinkEl.remove();thinkEl=null}
+    const d=JSON.parse(r);
+    if(d.response!=='__RESET__') addMsg('ai',d.response);
+    setStatus('Ready','#7cffb2');
+  }).catch(e=>{
+    if(thinkEl){thinkEl.remove();thinkEl=null}
+    addMsg('error','Failed: '+e);setStatus('Error','#ff6b6b');
+  });
+}
 
-        if self.entry.get() == "Type a message...":
-            self.entry.delete(0, tk.END)
+addMsg('system','LayerLearn ready. Type or hold SHIFT to talk.');
+setTimeout(()=>inp.focus(),100);
+</script>
+</body>
+</html>
+"""
 
-    def restore_placeholder(self, event):
 
-        if not self.entry.get():
-            self.entry.insert(0, "Type a message...")
+# ── Voice thread ─────────────────────────────────────────────────────────
 
-    # ───────── message helper ─────────
-
-    def add_message(self, label, msg, tag):
-
-        self.text.config(state="normal")
-        self.text.insert("end", f"\n{label}: {msg}\n", tag)
-        self.text.config(state="disabled")
-        self.text.see("end")
-
-    # ───────── Text input ─────────
-
-    def send(self, event=None):
-
-        command = self.entry.get()
-
-        if command.strip() == "" or command == "Type a message...":
-            return
-
-        self.entry.delete(0, tk.END)
-
-        self.add_message("You", command, "user")
-
-        threading.Thread(
-            target=self.run_agent,
-            args=(command,),
-            daemon=True
-        ).start()
-
-    def run_agent(self, command):
-
-        async def process():
-
-            self.add_message("🧠", "Thinking...", "thinking")
-
+def start_voice_thread():
+    async def voice_loop():
+        async def on_transcript(text: str) -> str:
+            add_msg("user", text)
+            set_status("Thinking…", "#ffaa33")
             try:
-                response = await self.agent.process(command)
+                response = await agent.process(text)
             except Exception as e:
                 response = f"Error: {e}"
                 traceback.print_exc()
+            add_msg("ai", response)
+            set_status("Ready", "#7cffb2")
+            return response
 
-            self.add_message("AI", response, "ai")
+        vc = VoiceController(on_transcript=on_transcript)
+        log.info("Voice controller started")
+        await vc.run()
 
-        asyncio.run(process())
-
-    # ───────── Voice system ─────────
-
-    def start_voice(self):
-
-        async def voice_loop():
-
-            async def on_transcript(text):
-
-                self.add_message("🎤 You", text, "user")
-
-                self.add_message("🧠", "Thinking...", "thinking")
-
-                try:
-                    response = await self.agent.process(text)
-                except Exception as e:
-                    response = f"Error: {e}"
-                    traceback.print_exc()
-
-                self.add_message("AI", response, "ai")
-
-                return response
-
-            self.voice_controller = self.voice_controller_class(
-                on_transcript=on_transcript
-            )
-
-            await self.voice_controller.run()
-
-        try:
-            asyncio.run(voice_loop())
-        except Exception:
-            traceback.print_exc()
-            self.add_message("System", "Voice system stopped unexpectedly.", "system")
+    try:
+        asyncio.run(voice_loop())
+    except Exception:
+        traceback.print_exc()
+        log.warning("Voice system stopped")
 
 
-# ───────── Startup Loader ─────────
+# ── Main ─────────────────────────────────────────────────────────────────
 
-def load_system(splash):
+def main():
+    global agent, _window
 
-    splash.set_status("Loading agent...", 20)
+    print("\n  🧠 LayerLearn Voice Agent")
+    print("  ─────────────────────────\n")
 
-    from core.agent import Agent
-
-    splash.set_status("Loading voice system...", 40)
-
-    from core.voice_controller import VoiceController
-
-    splash.set_status("Loading Whisper model...", 60)
-
+    print("  Loading Whisper model…")
     from core.stt import _get_model
     _get_model()
 
-    splash.set_status("Initialising AI agent...", 80)
-
+    print("  Initialising agent…")
     agent = Agent()
 
-    splash.set_status("Warming AI models...", 90)
+    print("  Starting voice system…")
+    threading.Thread(target=start_voice_thread, daemon=True).start()
 
-    asyncio.run(agent.process("hello"))
+    print("  ✅ Ready!\n")
 
-    splash.set_status("Ready!", 100)
+    api = Api()
+    _window = webview.create_window(
+        "LayerLearn Voice Agent",
+        html=HTML,
+        js_api=api,
+        width=680,
+        height=540,
+        min_size=(450, 350),
+        background_color="#0d0d0d",
+    )
 
-    splash.close()
+    # After window loads, update status
+    def on_loaded():
+        set_status("Ready", "#7cffb2")
 
-    return agent, VoiceController
+    _window.events.loaded += on_loaded
+    webview.start(debug=False)
 
-
-# ───────── Main Entry ─────────
 
 if __name__ == "__main__":
-
-    splash = SplashScreen()
-
-    result = {}
-
-    def background_load():
-        agent, vc = load_system(splash)
-        result["agent"] = agent
-        result["vc"] = vc
-
-    loader = threading.Thread(target=background_load)
-    loader.start()
-
-    splash.root.mainloop()
-
-    loader.join()
-
-    root = tk.Tk()
-
-    app = LayerLearnGUI(root, result["agent"], result["vc"])
-
-    root.mainloop()
-
+    main()

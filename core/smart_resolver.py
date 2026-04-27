@@ -338,64 +338,61 @@ def resolve_open_request(target: str) -> ResolveResult:
     """
     Smart resolution: figure out what the user means by "open X".
 
-    Logic:
+    Logic (DECISIVE — never ask, just act):
     1. Is X a URL/domain? → open in preferred browser
     2. Is X a known web service?
-       a. Is there a native app installed? → ask: app or web?
-       b. No native app? → open in browser (ask which if multiple)
+       a. Is there a native app installed? → open the native app
+       b. No native app? → open in browser
     3. Is X an installed app? → open the app
-    4. Not found → ask what they mean
+    4. Not found → search on web automatically
     """
     target_lower = target.lower().strip()
+    friendly = target.strip().title()  # "YouTube", "WhatsApp"
+    browser = get_pref("default_browser", "Google Chrome")
 
     # ── Is it a URL? ─────────────────────────────────────────────────
     if "." in target_lower and " " not in target_lower:
-        browser = get_pref("default_browser", "Google Chrome")
         return ResolveResult(
             action="open_url",
             target=target,
             browser=browser,
+            message=f"Opening {target.strip()}.",
         )
 
     # ── Is it a known web service? ───────────────────────────────────
     if target_lower in WEB_SERVICES:
         url = WEB_SERVICES[target_lower]
 
-        # Check if there's also a native app
+        # Prefer native app if installed
         if is_app_installed(target_lower):
             app_name = find_app_name(target_lower)
             return ResolveResult(
-                action="ask_web_or_app",
-                target=target_lower,
-                message=(
-                    f"I found {app_name} installed as an app, "
-                    f"and it's also available on the web at {url}. "
-                    f"Would you like me to open the app or the web version?"
-                ),
-                data={"app_name": app_name, "url": url},
+                action="open_app",
+                target=app_name,
+                message=f"Opening {friendly}.",
             )
         else:
-            # No native app — open on web
-            browser = get_pref("default_browser", "Google Chrome")
             return ResolveResult(
                 action="open_url",
                 target=url,
                 browser=browser,
-                message=f"Opening {target_lower} on web in {browser}.",
+                message=f"Opening {friendly}.",
             )
 
     # ── Is it an installed app? ──────────────────────────────────────
     app_name = find_app_name(target_lower)
     if app_name:
-        return ResolveResult(action="open_app", target=app_name)
+        return ResolveResult(
+            action="open_app",
+            target=app_name,
+            message=f"Opening {app_name}.",
+        )
 
-    # ── Not found ────────────────────────────────────────────────────
+    # ── Not found → search on web automatically ─────────────────────
+    search_url = f"https://www.google.com/search?q={target_lower}"
     return ResolveResult(
-        action="ask_clarify",
-        target=target_lower,
-        message=(
-            f"I couldn't find '{target}' as an installed app. "
-            f"Do you want me to search for it on the web instead?"
-        ),
-        data={"original": target},
+        action="open_url",
+        target=search_url,
+        browser=browser,
+        message=f"Searching for {friendly} on the web.",
     )

@@ -1,8 +1,9 @@
 # LayerLearn — Dependencies
 # ========================
 
-# LLM backend
+# LLM backends
 ollama>=0.4.0
+google-generativeai>=0.3.0
 
 # Voice pipeline
 faster-whisper>=1.0.0
@@ -22,6 +23,9 @@ plyer>=2.1.0
 
 # Terminal UI
 rich>=13.0.0
+
+# Native GUI window
+pywebview>=5.0.0
 
 # Logging
 loguru>=0.7.0

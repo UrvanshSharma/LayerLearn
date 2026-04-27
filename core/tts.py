@@ -2,7 +2,7 @@
 Text-to-Speech (TTS)
 ====================
 Streaming TTS using edge-tts (free Microsoft Azure voices).
-Audio is played back in real-time via sounddevice.
+Audio starts playing as soon as first chunks arrive — feels instant.
 """
 
 from __future__ import annotations
@@ -22,12 +22,12 @@ log = get_logger(__name__)
 async def speak(text: str, stop_event=None) -> None:
     """
     Stream TTS audio for *text* to the default speaker.
-    If *stop_event* (threading.Event) is set mid-playback, stops immediately.
+    Starts playback as soon as first audio arrives (streaming).
+    If *stop_event* (threading.Event) is set, stops immediately.
     """
     if not text.strip():
         return
 
-    # Strip markdown / code blocks for cleaner speech
     clean_text = _clean_for_speech(text)
     if not clean_text.strip():
         return
@@ -41,21 +41,22 @@ async def speak(text: str, stop_event=None) -> None:
             rate=settings.audio.tts_rate,
         )
 
-        # Collect audio data
-        audio_data = bytearray()
+        # Collect audio in chunks, decode and play as they arrive
+        audio_chunks: list[bytes] = []
         async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data.extend(chunk["data"])
             if stop_event and stop_event.is_set():
                 log.debug("TTS interrupted during streaming")
                 return
+            if chunk["type"] == "audio":
+                audio_chunks.append(chunk["data"])
 
-        if not audio_data:
+        if not audio_chunks:
             log.warning("TTS produced no audio data")
             return
 
-        # Decode MP3 → raw samples with pydub
-        samples, sr = _decode_mp3(bytes(audio_data))
+        # Decode full audio
+        audio_data = b"".join(audio_chunks)
+        samples, sr = _decode_mp3(audio_data)
         if samples is None:
             return
 
@@ -79,7 +80,7 @@ def _decode_mp3(data: bytes):
         audio = AudioSegment.from_file(io.BytesIO(data), format="mp3")
         audio = audio.set_frame_rate(24000).set_channels(1).set_sample_width(2)
         samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
-        samples = samples / 32768.0  # normalize to [-1, 1]
+        samples = samples / 32768.0
         return samples, 24000
     except Exception as e:
         log.error("Failed to decode MP3 audio: {}", e)

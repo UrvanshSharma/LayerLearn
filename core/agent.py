@@ -20,10 +20,12 @@ import re
 from typing import Optional
 
 import ollama
+import google.generativeai as genai
 
 from config import settings
 from core.logger import get_logger
 from core.memory import AgentMemory
+from core.context_memory import ContextMemory
 from core.tools import all_tools, get_tool, tool_schemas
 from core.safety import (
     requires_confirmation,
@@ -159,6 +161,34 @@ def detect_intent(text: str) -> Optional[dict]:
         if target not in ("it", "that", "this", "everything"):
             return {"tool": "quit_app", "args": {"name": target}}
 
+    # ── Automation: Solve on screen ─────────────────────────────
+    if re.search(
+        r"\b(solve (this|it|the|that)( problem| question| leetcode| challenge)?|code (this|it) (for me|on screen)|write the (solution|answer|code)|solve (this )?on (my )?screen)\b",
+        tl,
+    ):
+        lang = "python"  # default
+        m = re.search(r"\b(in |using )(python|java|cpp|c\+\+|javascript|js|go|rust|typescript)\b", tl)
+        if m:
+            lang = m.group(2)
+        return {"tool": "solve_on_screen", "args": {"instruction": t, "language": lang}}
+
+    # ── Automation: Compose email ───────────────────────────────
+    m = re.search(
+        r"(?:write|compose|draft|send|type)\s+(?:an? )?(?:email|mail|message)\s+(?:to\s+)?(\S+)(?:\s+(?:about|regarding|for|on)\s+(.+))?",
+        tl,
+    )
+    if m:
+        to = m.group(1) or ""
+        subject = m.group(2) or ""
+        return {"tool": "compose_email", "args": {"to": to, "subject": subject, "body": subject}}
+
+    # ── Automation: General automate ─────────────────────────────
+    if re.search(
+        r"\b(do (this|it|that) (for me|on screen)|automate (this|it|that)|fill (this|it|that) (out|in)|write (this|it|that) (for me|on screen)|complete (this|it|that))\b",
+        tl,
+    ):
+        return {"tool": "automate_task", "args": {"instruction": t}}
+
     # ── Search web ───────────────────────────────────────────────────
     m = re.match(r"(?:search|google|look up)\s+(?:for\s+|about\s+)?(.+)", tl)
     if m:
@@ -198,33 +228,34 @@ class Agent:
 
     def __init__(self) -> None:
         self.memory = AgentMemory()
+        self.context = ContextMemory()
         self._system_prompt = build_full_system_prompt()
         self._pending_confirmation: Optional[dict] = None
         self._pending_clarification: Optional[dict] = None
         self._warmup()
 
     def _warmup(self) -> None:
-        """Keep models loaded for faster responses."""
-    import threading
+        """Keep models loaded for faster responses (parallel warm)."""
+        import threading
 
-    def warm(model, label):
-        try:
-            ollama.chat(
-                model=model,
-                messages=[{"role": "user", "content": "hi"}],
-                options={"num_predict": 1},
-                keep_alive=settings.llm.keep_alive,
-            )
-            log.info("✓ {} model warm", label)
-        except Exception as e:
-            log.warning("Could not warm {} model: {}", label, e)
+        def warm(model, label):
+            try:
+                ollama.chat(
+                    model=model,
+                    messages=[{"role": "user", "content": "hi"}],
+                    options={"num_predict": 1},
+                    keep_alive=settings.llm.keep_alive,
+                )
+                log.info("✓ {} model warm", label)
+            except Exception as e:
+                log.warning("Could not warm {} model: {}", label, e)
 
-    for model, label in [
-        (settings.llm.text_model, "Text"),
-        (settings.llm.vision_model, "Vision"),
-    ]:
-        t = threading.Thread(target=warm, args=(model, label), daemon=True)
-        t.start()
+        for model, label in [
+            (settings.llm.text_model, "Text"),
+            (settings.llm.vision_model, "Vision"),
+        ]:
+            t = threading.Thread(target=warm, args=(model, label), daemon=True)
+            t.start()
 
     # ── Public API ───────────────────────────────────────────────────────
 
@@ -241,6 +272,19 @@ class Agent:
 
         self.memory.add_user(user_text)
 
+        # ── Follow-up: use cached screen context ─────────────────────
+        tl = user_text.strip().lower()
+        if self.context.last_screen and re.search(
+            r'\b(explain that|what was that|the error|the code|you (just )?saw|you (just )?see|that (error|code|bug|issue|screen))\b',
+            tl,
+        ):
+            ctx = self.context.last_screen
+            self.memory.add_user(
+                f"[Context: you recently analyzed the screen and saw: {ctx.description[:500]}]\n"
+                f"User follow-up: {user_text}"
+            )
+            return self._process_with_llm()
+
         # ── Fast path: Intent detection ──────────────────────────────
         intent = detect_intent(user_text)
 
@@ -254,7 +298,6 @@ class Agent:
                 browser_hint = intent.pop("_browser_hint", "")
                 intent.pop("_smart", None)
                 if browser_hint:
-                    # Remember browser preference
                     browser_name = self._resolve_browser_name(browser_hint)
                     if browser_name:
                         set_pref("default_browser", browser_name)
@@ -280,68 +323,52 @@ class Agent:
 
     def reset(self) -> None:
         self.memory.clear()
+        self.context.clear()
         self._pending_confirmation = None
         self._pending_clarification = None
         log.info("Agent reset")
 
-    # ── Smart Open (Human-Like Resolution) ───────────────────────────────
+    # ── Smart Open (Decisive — never asks, just acts) ──────────────────────
 
     def _smart_open(self, target: str) -> str:
         """
-        Resolve "open X" with human-like reasoning.
-        Checks apps, web services, asks questions as needed.
+        Resolve "open X" — never asks questions, always takes action.
+        Prefers native apps, falls back to web, auto-searches if unknown.
         """
         result = resolve_open_request(target)
         log.info("🧠 Smart resolve '{}' → {} ({})", target, result.action, result.target)
 
         if result.action == "open_app":
-            return self._handle_tool_call({
+            tool_result = self._handle_tool_call({
                 "tool": "open_app",
                 "args": {"name": result.target},
             })
+            # Use the friendly message from resolver, not the tool's verbose output
+            if result.message:
+                self.memory.add_assistant(result.message)
+                return result.message
+            return tool_result
 
         elif result.action == "open_url":
-            # Open URL in preferred browser
             return self._open_in_browser(result.target, result.browser, result.message)
 
-        elif result.action == "ask_web_or_app":
-            # Ask: open as app or web?
-            self._pending_clarification = {
-                "type": "web_or_app",
-                "app_name": result.data["app_name"],
-                "url": result.data["url"],
-                "original": target,
-            }
-            msg = result.message
-            self.memory.add_assistant(msg)
-            return msg
-
-        elif result.action == "ask_clarify":
-            # Can't find it — ask what to do
-            self._pending_clarification = {
-                "type": "not_found",
-                "original": target,
-            }
-            msg = result.message
-            self.memory.add_assistant(msg)
-            return msg
-
-        # Fallback
+        # Fallback (shouldn't happen but just in case)
         return self._handle_tool_call({
             "tool": "open_app",
             "args": {"name": target.title()},
         })
 
     def _open_in_browser(self, url: str, browser: str, message: str = "") -> str:
-        """Open a URL in a specific browser."""
+        """Open a URL in a specific browser. Returns concise message."""
         ok, fallback_message = open_url_in_browser(url, browser)
         if ok:
-            msg = message or fallback_message
+            # Use the friendly message (e.g. "Opening YouTube") not the URL
+            msg = message or f"Done."
             self.memory.add_assistant(msg)
             log.info("🌐 {}", msg)
             return msg
 
-        err = f"Failed to open {url}: {fallback_message}"
+        err = f"Couldn't open that. {fallback_message}"
         self.memory.add_assistant(err)
         return err
 
@@ -433,6 +460,48 @@ class Agent:
         full_msgs = [{"role": "system", "content": system}] + messages
 
         try:
+            # Try Gemma first if configured
+            if settings.llm.backend.lower() == "gemma" and settings.llm.google_api_key:
+                return self._call_gemma(full_msgs, system)
+            # Fall back to Ollama
+            return self._call_ollama(full_msgs)
+        except Exception as e:
+            log.error("LLM failed: {}", e)
+            return None
+
+    def _call_gemma(self, full_msgs: list[dict], system: str) -> Optional[str]:
+        """Call Google Gemini/Gemma API."""
+        try:
+            genai.configure(api_key=settings.llm.google_api_key)
+            model = genai.GenerativeModel(
+                settings.llm.gemma_model,
+                generation_config={
+                    "temperature": settings.llm.temperature,
+                    "max_output_tokens": settings.llm.max_tokens,
+                },
+                system_instruction=system,
+            )
+            
+            # Convert messages to Gemma format
+            # Gemma expects list of Content objects, not raw dicts
+            gemma_msgs = []
+            for msg in full_msgs:
+                if msg["role"] != "system":  # system is passed separately
+                    gemma_msgs.append({
+                        "role": msg["role"],
+                        "parts": [{"text": msg["content"]}]
+                    })
+            
+            response = model.generate_content(gemma_msgs)
+            log.debug("✅ Gemma response: {} chars", len(response.text))
+            return response.text
+        except Exception as e:
+            log.error("❌ Gemma call failed: {}, falling back to Ollama", e)
+            return self._call_ollama([{"role": "system", "content": system}] + [m for m in full_msgs if m["role"] != "system"])
+
+    def _call_ollama(self, full_msgs: list[dict]) -> Optional[str]:
+        """Call Ollama API."""
+        try:
             stream = ollama.chat(
                 model=settings.llm.text_model,
                 messages=full_msgs,
@@ -445,8 +514,8 @@ class Agent:
             )
             return "".join(chunk["message"]["content"] for chunk in stream)
         except Exception as e:
-            log.error("LLM failed: {}", e)
-            return None
+            log.error("❌ Ollama call failed: {}", e)
+            raise
 
     def _process_with_llm(self) -> str:
         """Standard LLM processing path."""
@@ -535,31 +604,35 @@ class Agent:
             return err
 
         self.memory.add_tool(tool_name, result.output)
+        self.context.record_tool(tool_name)
+
+        # Cache screen analysis for follow-up questions
+        screen_tools = {"capture_screen", "screen_question", "analyze_code",
+                        "generate_code", "read_screen_text"}
+        if tool_name in screen_tools and result.success:
+            from core.vision import _get_active_app
+            self.context.store_screen(result.output, _get_active_app())
 
         if not result.success:
             self.memory.add_assistant(result.output)
             return result.output
 
         # ── Direct-return tools (NO LLM re-summarization) ────────────
-        # Screen/vision tools already produce human-readable text
-        # Re-summarizing wastes 10+ seconds and loses precision
         direct = {
-            # Screen/vision — already natural language from vision model
             "capture_screen", "screen_question", "analyze_code",
             "generate_code", "read_screen_text",
-            # Quick single-value tools
             "open_app", "open_url", "open_website_in_chrome", "search_web",
             "get_time", "set_volume", "send_notification",
             "copy_to_clipboard", "git_status", "git_diff", "read_clipboard",
-            # Utility tools — already concise
             "calculator", "system_info", "active_window",
             "toggle_dark_mode", "do_not_disturb", "list_running_apps",
             "quit_app", "minimize_windows", "switch_to_app",
             "set_brightness", "word_count",
             "sleep_mac", "lock_screen", "empty_trash",
+            # Automation tools
+            "solve_on_screen", "compose_email", "automate_task",
         }
         if tool_name in direct:
-            # For voice: truncate very long results
             output = result.output
             if len(output) > 500:
                 output = output[:500] + "..."

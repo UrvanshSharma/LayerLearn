@@ -3,13 +3,11 @@ LayerLearn — Realtime Voice Agent
 ==================================
 Main entry point.
 
-    python3 main.py              # Voice mode (hold SPACE to talk)
-    python3 main.py --text       # Text mode (type in terminal)
+    python3 main.py  # Runs voice + text mode together
 """
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import sys
 
@@ -29,8 +27,8 @@ BANNER = """[bold cyan]
  ║          🧠  LayerLearn Voice Agent  🧠           ║
  ╠════════════════════════════════════════════════════╣
  ║                                                    ║
- ║  🎤 Voice:  Hold SPACE to talk                    ║
- ║  ⌨️  Text:   python3 main.py --text                ║
+ ║  🎤 Voice:  Hold SHIFT to talk                    ║
+ ║  ⌨️  Text:   Type commands below                   ║
  ║  ❌ Quit:   Ctrl+C                                ║
  ║                                                    ║
  ╠════════════════════════════════════════════════════╣
@@ -38,13 +36,14 @@ BANNER = """[bold cyan]
  ║                                                    ║
  ║  👁  "what's on my screen" — see everything        ║
  ║  🔧 "help me with this code" — debug & fix        ║
- ║  🚀 "open safari" / "open spotify"                ║
+ ║  🚀 "open chrome" / "open spotify"                ║
  ║  🔍 "search for python tutorials"                 ║
  ║  📝 "type hello world" — automate typing          ║
  ║  ⌨️  "press cmd+s" — keyboard shortcuts           ║
  ║  📁 "read file main.py" / "write file"            ║
- ║  🕐 "what time is it"                             ║
+ ║  🕐 "what time is it" / 🧮 "calculate 5+3"       ║
  ║  📧 "draft an email to ..."                       ║
+ ║  🌙 "dark mode" / 📱 "what apps are running"      ║
  ║  🔄 "reset" — clear conversation memory           ║
  ║                                                    ║
  ╚════════════════════════════════════════════════════╝

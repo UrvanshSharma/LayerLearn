@@ -24,12 +24,22 @@ LOGS_DIR.mkdir(exist_ok=True)
 
 @dataclass
 class LLMConfig:
-    """Ollama model settings."""
+    """LLM settings (supports both Ollama and Google Gemma)."""
+    # Backend selection
+    backend: str = os.getenv("LLM_BACKEND", "gemma")  # "gemma" or "ollama"
+    
+    # Google Gemma API
+    google_api_key: str = os.getenv("GOOGLE_API_KEY", "")
+    gemma_model: str = os.getenv("GEMMA_MODEL", "gemini-2.0-flash")  # Latest fast model
+    
+    # Ollama (fallback)
     host: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     text_model: str = os.getenv("OLLAMA_TEXT_MODEL", "llama3.2")
     vision_model: str = os.getenv("OLLAMA_VISION_MODEL", "llama3.2-vision")
-    temperature: float = float(os.getenv("OLLAMA_TEMPERATURE", "0.3"))
-    max_tokens: int = int(os.getenv("OLLAMA_MAX_TOKENS", "512"))  # shorter = way faster
+    
+    # Shared settings
+    temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.3"))
+    max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "512"))  # shorter = faster
     keep_alive: str = "30m"
 
 

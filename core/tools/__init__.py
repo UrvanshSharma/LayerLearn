@@ -69,6 +69,7 @@ def _auto_register() -> None:
     from core.tools import system_tools   # noqa: F401
     from core.tools import communication_tools  # noqa: F401
     from core.tools import utility_tools  # noqa: F401
+    from core.tools import automation_tools  # noqa: F401
 
 
 _auto_register()

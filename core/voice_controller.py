@@ -208,7 +208,6 @@ class VoiceController:
             # Handle shift specially (left/right shift)
             if settings.audio.push_to_talk_key == "shift":
                 return key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
-
-                return key == self._ptt_key
+            return key == self._ptt_key
         except Exception:
             return False
